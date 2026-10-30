@@ -1,56 +1,47 @@
-# DuoBar Lite — AppKit-only experiment
+# DuoBar Lite — passive AppKit menu-bar indicator
 
-A deliberately minimal **battery + network + volume** menu-bar glyph, developed as an independent executable within a fork of [DuoBar](https://github.com/Mikeli7666/DuoBar). It does **not** replace or patch the original DuoBar app.
+A lightweight, independent AppKit/CoreGraphics implementation of the [DuoBar](https://github.com/Mikeli7666/DuoBar) three-in-one status glyph. It retains only the battery ring, network indicator, and four volume dots. It **does not replace** the original DuoBar application.
 
-## What it does
+## Behavior
 
-- **Outer ring:** MacBook battery level, including while connected to power (never switches to a CPU/memory/thermal visualization). Charging/connected power shows a small bolt. The ring gap, arc thickness, center Wi-Fi arcs and curved four-dot row use the numerical geometry from DuoBar 1.3.2.
-- **Center:** Wi-Fi / Ethernet / disconnected network state via `NWPathMonitor`. CoreWLAN supplies radio power, link events and RSSI-based signal strength (strong/medium/weak). RSSI is refreshed when opening the menu or when the Wi-Fi link changes; no high-frequency quality monitoring, network scans or SSID/Location requests.
-- **Four lower dots:** Default audio output volume via CoreAudio, with mute support.
-- **Click icon:** Native NSMenu with a Wi-Fi checkbox toggle, Wi-Fi Settings shortcut, battery/network/volume and output device, Sound Settings shortcut, and Quit. Merely opening the menu never changes Wi-Fi power.
-- **No** SwiftUI, NSPopover, Adaptive Ring sampling, general CPU monitoring, memory monitoring, Bluetooth scanning, nearby Wi-Fi scanning, or external dependencies.
-- **Event-driven:** IOKit battery notifications (+ 60-second safety net), Network framework route updates, CoreWLAN radio/link events (not frequent RSSI-quality notifications), and CoreAudio property listeners (default output, devices, volume, mute, device alive). Short 0.3s animations use a 30 fps timer only during transition; no idle animation timer. Network glyphs never overlap: the old center fades out before the new one fades in. An immutable snapshot drives every image.
+- **Battery:** outer ring displays current battery percentage and charging state, including when plugged in. It never switches to CPU/memory/thermal readings.
+- **Network:** center glyph represents Wi-Fi, Ethernet, or disconnected state. Wi-Fi signal-strength bands are read through CoreWLAN on startup, radio/link changes, or wake; no nearby network scanning, SSID requests or Location authorization.
+- **Audio:** bottom four dots reflect default output-device volume/mute when supported by CoreAudio; changes to audio devices are observed.
+- **Only interaction:** clicking the menu-bar icon opens **one native menu item — “Quit DuoBar Lite”**. No Wi-Fi power toggle, device controls, settings buttons, status popover, or action on the icon itself.
+- **Visual transitions:** short 0.3-second animations for actual status changes, no always-running animation loop; respects Reduce Motion. Different center glyphs are shown sequentially, never composited on top of one another.
+- **No SwiftUI**, Adaptive Ring performance collection, Bluetooth scans, or third-party dependencies. Status updates use native IOKit, Network, CoreWLAN, and CoreAudio notifications, plus a 60-second battery safety-net.
 
-## Wi-Fi and audio controls
+## Build and run
 
-Click the glyph and choose **Wi-Fi** (checked = on). The CoreWLAN power toggle is only called on explicit click. If macOS rejects it, a dialog explains the error and provides **Open Wi-Fi Settings**. Turning Wi-Fi off may disconnect your Mac; use the switch with care.
-
-The output device name and scalar volume (when available) are shown in the native menu. CoreAudio device-change events cover AirPods, USB, HDMI and DisplayPort output changes. On devices that do not expose scalar volume, the dots are inactive and **Sound Settings** offers a fallback. No automatic device picker or microphone access.
-
-## Building locally
-
-Requires macOS 13 or later and Xcode with its command-line tools:
+Requirements: macOS 13+ and Xcode command-line tools.
 
 ```sh
-cd Lite
+cd ~/opt/DuoBarLite/Lite
 ./build.sh
 open "build/DuoBar Lite.app"
 ```
 
-The build script creates a self-contained, ad-hoc-signed app bundle. You can run ten volume quantization assertions and render six synthetic UI states without system changes:
+The build creates a locally ad-hoc-signed `DuoBar Lite.app` with an independent bundle identifier (`com.immadolf.DuoBarLite`). After rebuilding, **quit the running Lite app and launch it again**; the original DuoBar is unaffected.
+
+Since the only menu action is Quit, you can also stop the Lite app through Activity Monitor.
+
+## Diagnostics and tests
 
 ```sh
-./build.sh
 ./build/"DuoBar Lite.app"/Contents/MacOS/DuoBarLite --self-test
+./build/"DuoBar Lite.app"/Contents/MacOS/DuoBarLite --probe-menu
+./build/"DuoBar Lite.app"/Contents/MacOS/DuoBarLite --probe-wifi
 ```
 
-Preview PNGs appear in `build/fixtures/`. The test process does not start a menu bar service. Read-only Wi-Fi probe (never toggles the radio): `./build/"DuoBar Lite.app"/Contents/MacOS/DuoBarLite --probe-wifi`. Read-only native menu wiring and audio output probe: `./build/"DuoBar Lite.app"/Contents/MacOS/DuoBarLite --probe-menu`. **Not notarized or packaged as an official release.** To start at login, add the built app manually through macOS Login Items. You can run it alongside official DuoBar because it has a distinct app name and bundle identifier (`com.immadolf.DuoBarLite`).
+The self-test checks volume-dot thresholds, six static PNG fixtures and seven phases of offline-to-Wi-Fi transition. The menu test asserts there is exactly **one Quit entry**. Wi-Fi probing is **read-only**. None of these command-line tests intentionally toggles Wi-Fi or opens a control panel.
 
-## Resource measurements
+An earlier macOS 27.2 / 16 GB Apple silicon test measured roughly **12.6 MB Physical Footprint** and **0.08% of one CPU core** over about a minute after removing high-frequency CoreWLAN quality notifications. Performance depends on hardware and OS version; this is not a certified benchmark.
 
-On one 16 GB Apple silicon MacBook Pro running macOS 27.2, version 0.2.0's Physical Footprint was approximately 12 MB after one minute. Early 0.3.0 RSSI event monitoring cost about 1.5% of one CPU core and reached 20 MB physical footprint. After removing high-frequency quality events, a 61-second test measured about 0.08% of a CPU core and 12.6 MB Physical Footprint on the test machine. Test results depend on macOS and hardware. These readings are snapshots on one machine, not a universal performance guarantee. Validate battery, network, audio, and menu-bar visuals on your own hardware before considering this production-ready.
+## Scope and limitations
 
-## 0.3.1 visual fix
+- The icon uses some glyph geometry measured in upstream DuoBar v1.3.2 and SF Symbols for Ethernet/offline/charging. It is not a pixel-perfect clone of every transition.
+- USB, DisplayPort, HDMI and other outputs might not expose software volume; the dots then display the unavailable state.
+- No wireless network list, volume slider, audio-device picker, settings, Apple Developer ID signature, notarization, updates, or automatic startup.
+- This project remains a **prototype**, not a verified production release.
 
-Previously, transitions between disconnected, Wi-Fi, and Ethernet states painted both glyphs into the same frame with blended opacity, making the center look like several icons superimposed. Now the old glyph fades completely before the new one appears. The `--self-test` fixture includes seven stages of offline-to-Wi-Fi transition. Battery-ring and volume-dot transitions remain smooth and independent.
-
-## Deliberate trade-offs
-
-- No output-device picker, Wi-Fi joining, nearby network list, battery history, permanent animations, menu-bar tuning, or settings UI.
-- Center Wi-Fi, outer ring, and audio-dot geometry use upstream measured ratios. Ethernet/offline/charging use SF Symbols and are not pixel-identical. Short state transitions are implemented; complex choreography and temporary AirPods glyphs remain intentionally omitted.
-- Some USB / HDMI audio devices do not expose a scalar volume property, in which case volume is shown as unavailable.
-- No automatic updates, signing certificate, or notarization.
-
-Local source and build location: `~/opt/DuoBarLite/Lite`. The app is launched from `~/opt/DuoBarLite/Lite/build/DuoBar Lite.app`; rebuilding requires restarting this application. The original `/Applications/DuoBar.app` is separate.
-
-The original upstream project and license are retained in the fork. This small implementation is distributed under the same MIT license as DuoBar; see the repository root `LICENSE`.
+This Fork retains the original project's MIT license, included at the repository root.

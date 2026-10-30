@@ -15,22 +15,16 @@ struct Status: Equatable {
     var networkKind: NetworkKind = .other
     var volume: Double?
     var muted = false
-    var audioOutputName: String?
 
     enum NetworkKind: Equatable { case wifi, ethernet, other }
 }
 
-private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate {
+private final class DuoBarLite: NSObject, NSApplicationDelegate {
     private var status = Status()
     private let statusItem = NSStatusBar.system.statusItem(withLength: GlyphRenderer.statusItemWidth)
+    // A single Quit command is the only interaction. The status icon itself
+    // remains a passive display: no Wi-Fi, audio, or settings controls.
     private let menu = NSMenu()
-    private let wifiToggleItem = NSMenuItem(title: "Wi-Fi", action: nil, keyEquivalent: "")
-    private let openWiFiSettingsItem = NSMenuItem(title: "Wi-Fi Settings…", action: nil, keyEquivalent: "")
-    private let batteryItem = NSMenuItem(title: "Battery", action: nil, keyEquivalent: "")
-    private let networkItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
-    private let volumeItem = NSMenuItem(title: "Volume", action: nil, keyEquivalent: "")
-    private let audioOutputItem = NSMenuItem(title: "Audio Output", action: nil, keyEquivalent: "")
-    private let openSoundSettingsItem = NSMenuItem(title: "Sound Settings…", action: nil, keyEquivalent: "")
 
     private let wifi = WiFiController()
     private var wakeObserver: NSObjectProtocol?
@@ -54,7 +48,7 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        configureMenu()
+        configureQuitMenu()
         wifi.onChange = { [weak self] in self?.refreshWiFiState() }
         refreshWiFiState(animated: false)
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -91,94 +85,26 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
         detachAudioDeviceListeners()
     }
 
-    private func configureMenu() {
-        // The first menu entry is a real Wi-Fi radio switch. An additional
-        // Settings shortcut provides recovery if the OS rejects the CoreWLAN
-        // change. Merely opening the menu never changes the Wi-Fi power state.
-        wifiToggleItem.target = self
-        wifiToggleItem.action = #selector(toggleWiFiPower)
-        menu.addItem(wifiToggleItem)
-
-        openWiFiSettingsItem.target = self
-        openWiFiSettingsItem.action = #selector(openWiFiSettings)
-        menu.addItem(openWiFiSettingsItem)
-
-        menu.addItem(.separator())
-        for item in [batteryItem, networkItem, volumeItem, audioOutputItem] {
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-
-        openSoundSettingsItem.target = self
-        openSoundSettingsItem.action = #selector(openSoundSettings)
-        menu.addItem(openSoundSettingsItem)
-
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit DuoBar Lite", action: #selector(quitApplication), keyEquivalent: "q")
+    private func configureQuitMenu() {
+        let quit = NSMenuItem(title: "Quit DuoBar Lite",
+                              action: #selector(quitApplication), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-        menu.delegate = self
         statusItem.menu = menu
         statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.toolTip = "Battery · Network · Volume"
+        statusItem.button?.toolTip = "DuoBar Lite"
     }
 
     @objc private func quitApplication() { NSApp.terminate(nil) }
 
     func runReadOnlyMenuProbe() {
-        configureMenu()
-        refreshWiFiState(animated: false)
-        updateBattery()
-        updateAudio()
-        menuNeedsUpdate(menu)
-        precondition(wifiToggleItem.action == #selector(toggleWiFiPower))
-        precondition(wifiToggleItem.target === self)
-        precondition(openWiFiSettingsItem.action == #selector(openWiFiSettings))
-        print("MENU_PROBE radio=\(wifiToggleItem.title) checked=\(wifiToggleItem.state == .on) enabled=\(wifiToggleItem.isEnabled)")
-        print("MENU_PROBE \(batteryItem.title)")
-        print("MENU_PROBE \(networkItem.title) (route probe inactive)")
-        print("MENU_PROBE \(volumeItem.title)")
-        print("MENU_PROBE \(audioOutputItem.title)")
-        print("MENU_PROBE toggle action wired; Wi-Fi radio unchanged")
-    }
-
-    @objc private func toggleWiFiPower() {
-        // Recheck on click. The currently routed connection may be Ethernet,
-        // so NWPathMonitor's path status is NOT the radio power state.
-        let before = wifi.snapshot()
-        guard before.available else {
-            showWiFiError(WiFiController.PowerError.interfaceUnavailable)
-            return
-        }
-        do {
-            let after = try wifi.setPower(!before.poweredOn)
-            applyWiFiState(after)
-        } catch {
-            refreshWiFiState()
-            showWiFiError(error)
-        }
-    }
-
-    @objc private func openWiFiSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.wifi-settings-extension") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    @objc private func openSoundSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    private func showWiFiError(_ error: Error) {
-        // Error feedback is only instantiated after an actual user action
-        // fails, so normal idle operation does not allocate a window.
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Could not change Wi-Fi state"
-        alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "Open Wi-Fi Settings")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { openWiFiSettings() }
+        configureQuitMenu()
+        precondition(menu.items.count == 1, "Only the Quit command is allowed")
+        let quit = menu.items[0]
+        precondition(quit.action == #selector(quitApplication))
+        precondition(quit.target === self)
+        precondition(statusItem.menu === menu)
+        print("PASS: Quit-only menu (1 item), no Wi-Fi, audio or settings actions")
     }
 
     private func refreshWiFiState(animated: Bool = true) {
@@ -188,34 +114,11 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
     private func applyWiFiState(_ snapshot: WiFiController.Snapshot, animated: Bool = true) {
         let old = status
         status.wifiOn = snapshot.available ? snapshot.poweredOn : nil
-        // Only publish when the displayed signal-strength band changes.
-        // Tiny RSSI fluctuations should not restart icon animations.
+        // RSSI is grouped by displayed band to avoid unnecessary refreshes.
         status.wifiRSSI = snapshot.rssi.map { $0 >= -65 ? -55 : $0 >= -75 ? -70 : -85 }
         if old != status {
             if animated { transition(from: old) } else { redraw() }
         }
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        refreshWiFiState()
-        let snapshot = wifi.snapshot()
-        wifiToggleItem.isEnabled = snapshot.available
-        wifiToggleItem.title = snapshot.available ? "Wi-Fi" : "Wi-Fi (Unavailable)"
-        wifiToggleItem.state = snapshot.poweredOn && snapshot.available ? .on : .off
-
-        if let charge = status.charge {
-            batteryItem.title = "Battery: \(Int((charge * 100).rounded()))%\(status.charging ? " · Charging" : status.onAC ? " · AC Power" : "")"
-        } else {
-            batteryItem.title = "Battery: Unavailable"
-        }
-        let transport = status.networkKind == .wifi ? "Wi-Fi" : status.networkKind == .ethernet ? "Ethernet" : "Network"
-        networkItem.title = "\(transport): \(status.networkUp ? "Connected" : "Disconnected")"
-        if let volume = status.volume {
-            volumeItem.title = "Volume: \(status.muted ? "Muted" : "\(Int((volume * 100).rounded()))%")"
-        } else {
-            volumeItem.title = "Volume: Device-controlled / Unavailable"
-        }
-        audioOutputItem.title = "Audio Output: " + (status.audioOutputName ?? "Unavailable")
     }
 
     private func configureBatteryNotifications() {
@@ -303,17 +206,6 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
             && value != 0
     }
 
-    private func currentAudioOutputName(_ device: AudioDeviceID) -> String? {
-        guard device != AudioDeviceID(kAudioObjectUnknown) else { return nil }
-        var address = audioAddress(kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal)
-        var value: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value) == noErr else {
-            return nil
-        }
-        return value?.takeRetainedValue() as String?
-    }
-
     private func defaultAudioDevice() -> AudioDeviceID {
         let system = AudioObjectID(kAudioObjectSystemObject)
         var address = audioAddress(kAudioHardwarePropertyDefaultOutputDevice, scope: kAudioObjectPropertyScopeGlobal)
@@ -368,7 +260,6 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
         let old = status
         let device = defaultAudioDevice()
         rebindAudioDevice(device)
-        status.audioOutputName = currentAudioOutputName(device)
         if device == AudioDeviceID(kAudioObjectUnknown) {
             status.volume = nil
             status.muted = false
@@ -438,7 +329,7 @@ if CommandLine.arguments.contains("--probe-menu") {
     let service = WiFiController()
     let snapshot = service.snapshot()
     print("WIFI_READ_ONLY available=\(snapshot.available) poweredOn=\(snapshot.poweredOn) rssi=\(snapshot.rssi.map(String.init) ?? "unavailable")")
-    // Don't invoke setPower here: changing Wi-Fi could disrupt remote access.
+    // Probe reads state; no Wi-Fi power controls exist in this build.
 } else if CommandLine.arguments.contains("--self-test") {
     // No app window, process observers or permissions are involved in this mode.
     precondition(GlyphRenderer.activeDotCount(volume: nil, muted: false) == nil)
