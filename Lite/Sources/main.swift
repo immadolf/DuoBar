@@ -5,7 +5,7 @@ import Network
 
 // A deliberately small menu-bar companion: no SwiftUI, popover, performance
 // telemetry, Bluetooth scanning, Wi-Fi enumeration, or accessibility permission.
-private struct Status: Equatable {
+struct Status: Equatable {
     var charge: Double?
     var onAC = false
     var charging = false
@@ -19,7 +19,7 @@ private struct Status: Equatable {
 
 private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status = Status()
-    private let statusItem = NSStatusBar.system.statusItem(withLength: 35)
+    private let statusItem = NSStatusBar.system.statusItem(withLength: GlyphRenderer.statusItemWidth)
     private let menu = NSMenu()
     private let batteryItem = NSMenuItem(title: "Battery", action: nil, keyEquivalent: "")
     private let networkItem = NSMenuItem(title: "Network", action: nil, keyEquivalent: "")
@@ -246,53 +246,82 @@ private final class DuoBarLite: NSObject, NSApplicationDelegate, NSMenuDelegate 
     }
 
     private func redraw() {
-        // 33 x 22 pt; rendered by AppKit on the screen's native scale.
-        let image = NSImage(size: NSSize(width: 33, height: 22), flipped: false) { [weak self] bounds in
-            guard let self, let cg = NSGraphicsContext.current?.cgContext else { return true }
-            let center = CGPoint(x: bounds.midX, y: 12.1)
-            let radius: CGFloat = 8.5
-            let start = CGFloat.pi * 1.75
-            let end = CGFloat.pi * (1.75 + 1.5)
-            cg.setLineWidth(2.0)
-            cg.setLineCap(.round)
-            cg.setShouldAntialias(true)
-
-            cg.setStrokeColor(NSColor.labelColor.withAlphaComponent(0.20).cgColor)
-            cg.addArc(center: center, radius: radius, startAngle: start,
-                      endAngle: end, clockwise: false)
-            cg.strokePath()
-
-            if let charge = self.status.charge {
-                cg.setStrokeColor(NSColor.labelColor.cgColor)
-                cg.addArc(center: center, radius: radius, startAngle: start,
-                          endAngle: start + (end - start) * CGFloat(charge), clockwise: false)
-                cg.strokePath()
-            }
-
-            let symbolName = !self.status.networkUp ? "wifi.slash" :
-                self.status.networkKind == .ethernet ? "cable.connector.horizontal" :
-                self.status.networkKind == .wifi ? "wifi" : "network"
-            if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)) {
-                symbol.draw(in: NSRect(x: center.x - 5.2, y: center.y - 4.6, width: 10.4, height: 9.2),
-                            from: .zero, operation: .sourceOver, fraction: self.status.networkUp ? 1 : 0.4)
-            }
-
-            let volume = self.status.muted ? 0.0 : self.status.volume ?? 0.0
-            for idx in 0..<4 {
-                let x = center.x + CGFloat(idx) * 4 - 6
-                let on = volume > Double(idx) / 4.0
-                cg.setFillColor(NSColor.labelColor.withAlphaComponent(on ? 1.0 : 0.22).cgColor)
-                cg.fillEllipse(in: CGRect(x: x - 1.05, y: 1.05, width: 2.1, height: 2.1))
-            }
-            return true
-        }
-        image.isTemplate = true
-        statusItem.button?.image = image
+        statusItem.button?.image = GlyphRenderer.image(for: status)
     }
+
 }
 
-let application = NSApplication.shared
-private let delegate = DuoBarLite()
-application.delegate = delegate
-application.run()
+if CommandLine.arguments.contains("--self-test") {
+    // No app window, process observers or permissions are involved in this mode.
+    precondition(GlyphRenderer.activeDotCount(volume: nil, muted: false) == nil)
+    precondition(GlyphRenderer.activeDotCount(volume: 0, muted: false) == 0)
+    precondition(GlyphRenderer.activeDotCount(volume: 0.01, muted: false) == 1)
+    precondition(GlyphRenderer.activeDotCount(volume: 0.25, muted: false) == 1)
+    precondition(GlyphRenderer.activeDotCount(volume: 0.26, muted: false) == 2)
+    precondition(GlyphRenderer.activeDotCount(volume: 0.50, muted: false) == 2)
+    precondition(GlyphRenderer.activeDotCount(volume: 0.75, muted: false) == 3)
+    precondition(GlyphRenderer.activeDotCount(volume: 1.0, muted: false) == 4)
+    precondition(GlyphRenderer.activeDotCount(volume: 1.0, muted: true) == 0)
+    precondition(GlyphRenderer.activeDotCount(volume: .nan, muted: false) == nil)
+
+    let fixtureDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent("build/fixtures", isDirectory: true)
+    try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+    let fixtures: [(String, Status)] = [
+        ("wifi-on-battery", Status(charge: 0.72, networkUp: true, networkKind: .wifi,
+                                   volume: 0.70)),
+        ("wifi-charging", Status(charge: 0.45, onAC: true, charging: true, networkUp: true,
+                                 networkKind: .wifi, volume: 0.30)),
+        ("wifi-full", Status(charge: 1.0, onAC: true, networkUp: true,
+                             networkKind: .wifi, volume: 1)),
+        ("ethernet-muted", Status(charge: 0.93, networkUp: true, networkKind: .ethernet,
+                                  volume: 0.84, muted: true)),
+        ("offline-low-battery", Status(charge: 0.08, networkUp: false, volume: 0.05)),
+        ("unavailable", Status())
+    ]
+    var distinctImages = Set<Data>()
+    for (name, snapshot) in fixtures {
+        let width = Int(GlyphRenderer.imageSize.width * 4)
+        let height = Int(GlyphRenderer.imageSize.height * 4)
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width,
+                                           pixelsHigh: height, bitsPerSample: 8,
+                                           samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let drawingContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            fatalError("Could not create bitmap test context")
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = drawingContext
+        drawingContext.cgContext.scaleBy(x: 4, y: 4)
+        GlyphRenderer.draw(snapshot, in: CGRect(origin: .zero, size: GlyphRenderer.imageSize),
+                           context: drawingContext.cgContext)
+        drawingContext.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        guard let composited = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width,
+                                                pixelsHigh: height, bitsPerSample: 8,
+                                                samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let compositedContext = NSGraphicsContext(bitmapImageRep: composited),
+              let image = bitmap.cgImage else { fatalError("Could not composite PNG") }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = compositedContext
+        compositedContext.cgContext.setFillColor(NSColor.white.cgColor)
+        compositedContext.cgContext.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        compositedContext.cgContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        compositedContext.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        guard let bytes = composited.representation(using: .png, properties: [:]), bytes.count > 200 else {
+            fatalError("Invalid PNG test fixture")
+        }
+        distinctImages.insert(bytes)
+        try bytes.write(to: fixtureDirectory.appendingPathComponent(name + ".png"))
+        print("rendered: " + name + ".png (" + String(bytes.count) + " bytes)")
+    }
+    precondition(distinctImages.count >= 4, "Different UI states must render differently")
+    print("PASS: 10 volume tests; 6 image fixtures; different states change pixels")
+} else {
+    let application = NSApplication.shared
+    let delegate = DuoBarLite()
+    application.delegate = delegate
+    application.run()
+}
